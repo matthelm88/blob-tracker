@@ -99,6 +99,36 @@
     </label>
     <label class="check"><input type="checkbox" id="labels"> Show labels</label>
 
+    <h2>DRUM MACHINE</h2>
+    <label>Shapes play drums
+      <select id="drums">
+        <option value="off">Off</option>
+        <option value="on">On</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" id="muteOrig"> Mute the video's own sound</label>
+    <label>Tempo (BPM): <span class="val" id="bpmV"></span>
+      <input type="range" id="bpm" min="60" max="200">
+    </label>
+    <label>Lock hits to the beat grid
+      <select id="quant">
+        <option value="16">1/16 notes (busy)</option>
+        <option value="8">1/8 notes</option>
+        <option value="4">1/4 notes (sparse)</option>
+        <option value="0">Off (play instantly)</option>
+      </select>
+    </label>
+    <label>Busy-ness (% of hits that play): <span class="val" id="busyV"></span>
+      <input type="range" id="busy" min="0" max="100">
+    </label>
+    <label>Re-hit when a shape moves (% of width, 0 = only new shapes): <span class="val" id="moveHitV"></span>
+      <input type="range" id="moveHit" min="0" max="30">
+    </label>
+    <label>Drum volume: <span class="val" id="drumVolV"></span>
+      <input type="range" id="drumVol" min="0" max="100">
+    </label>
+    <p class="hint">Square = kick · Triangle = snare · Circle = hi-hat · Diamond = clap · Corners = tom (pitch by height) · Crosshair = rim. Use Shape: Mixed to hear the full kit. Bigger blobs hit harder.</p>
+
     <h2>SOUND</h2>
     <label>Beat sync
       <select id="beatMode">
@@ -129,6 +159,7 @@ const DEFAULTS = {
   mode: 'motion', threshold: 25, minSize: 12, maxBlobs: 24, detail: 160,
   smooth: 70, hold: 10,
   shape: 'mixed', linkMode: 'chain', linkDist: 25, dim: 25, labels: true,
+  drums: 'off', muteOrig: true, bpm: 120, quant: '16', busy: 75, moveHit: 6, drumVol: 80,
   beatMode: 'pulse', beatSens: 50, beatAmt: 60, volume: 80
 };
 const SETTING_IDS = Object.keys(DEFAULTS);
@@ -152,7 +183,7 @@ function applySettings(s) {
     if (el.type === 'checkbox') el.checked = !!s[id]; else el.value = s[id];
   }
   refreshLabels();
-  setVolume();
+  updateGains();
 }
 function saveSettings() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(getSettings())); } catch (e) {}
@@ -177,9 +208,10 @@ let recorder = null;
 let chunks = [];
 
 // ---------- Audio ----------
-let actx = null, analyser = null, gainNode = null, audioDest = null, freq = null;
+let actx = null, analyser = null, origGain = null, drumBus = null, masterGain = null, audioDest = null, freq = null;
 let energyAvg = 0, lastBeat = 0, pulse = 0;
 
+// Sound path: video sound -> origGain -> master;  drums -> drumBus -> master;  master -> speakers + recorder
 function initAudio() {
   if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
   try {
@@ -188,17 +220,27 @@ function initAudio() {
     analyser = actx.createAnalyser();
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.2;
-    gainNode = actx.createGain();
+    origGain = actx.createGain();
+    drumBus = actx.createGain();
+    masterGain = actx.createGain();
     audioDest = actx.createMediaStreamDestination();
     src.connect(analyser);
-    src.connect(gainNode);
-    gainNode.connect(actx.destination);
-    src.connect(audioDest);
+    src.connect(origGain);
+    origGain.connect(masterGain);
+    drumBus.connect(masterGain);
+    masterGain.connect(actx.destination);
+    masterGain.connect(audioDest);
     freq = new Uint8Array(analyser.frequencyBinCount);
-    setVolume();
+    updateGains();
   } catch (e) { console.warn('Audio not available', e); }
 }
-function setVolume() { if (gainNode) gainNode.gain.value = +$('volume').value / 100; }
+function drumsOn() { return $('drums').value === 'on'; }
+function updateGains() {
+  if (!actx) return;
+  masterGain.gain.value = +$('volume').value / 100;
+  origGain.gain.value = (drumsOn() && $('muteOrig').checked) ? 0 : 1;
+  drumBus.gain.value = drumsOn() ? +$('drumVol').value / 100 : 0;
+}
 
 function onBeat() {
   pulse = 1;
@@ -208,7 +250,8 @@ function onBeat() {
 // Watches the low (kick drum / bass) frequencies and fires on sudden jumps
 function audioTick(now, dt) {
   pulse = Math.max(0, pulse - dt * 3.5);
-  if (!analyser || video.paused || $('beatMode').value === 'off') return;
+  // When the drum machine is on, the flashes follow the generated drums instead of the video's sound
+  if (!analyser || video.paused || $('beatMode').value === 'off' || drumsOn()) return;
   analyser.getByteFrequencyData(freq);
   const binHz = actx.sampleRate / analyser.fftSize;
   const lo = Math.max(1, Math.floor(40 / binHz)), hi = Math.ceil(160 / binHz);
@@ -224,12 +267,12 @@ function audioTick(now, dt) {
 // ---------- Controls ----------
 document.querySelectorAll('input, select').forEach(el => {
   if (el.id === 'file') return;
-  el.addEventListener('input', () => { refreshLabels(); saveSettings(); });
-  el.addEventListener('change', saveSettings);
+  el.addEventListener('input', () => { refreshLabels(); updateGains(); saveSettings(); });
+  el.addEventListener('change', () => { updateGains(); saveSettings(); });
 });
 $('detail').addEventListener('input', () => { prevGray = null; });
 $('mode').addEventListener('change', () => { prevGray = null; tracks = []; });
-$('volume').addEventListener('input', setVolume);
+$('drums').addEventListener('change', initAudio);
 $('reset').onclick = () => { applySettings(DEFAULTS); saveSettings(); prevGray = null; tracks = []; };
 
 $('file').addEventListener('click', initAudio);
@@ -338,13 +381,18 @@ function updateTracks(dets) {
     const t = tracks[ti], d = dets[di];
     t.tx = d.x; t.ty = d.y; t.tw = d.w; t.th = d.h;
     t.missing = 0;
+    // A shape that has moved far enough since its last hit plays its drum again
+    const moveHit = +$('moveHit').value / 100 * out.width;
+    if (moveHit > 0 && Math.hypot(d.cx - t.hx, d.cy - t.hy) > moveHit) { t.hx = d.cx; t.hy = d.cy; queueHit(t); }
   }
   tracks.forEach((t, ti) => { if (!tUsed.has(ti)) t.missing++; });
   const hold = +$('hold').value;
   tracks = tracks.filter(t => t.missing <= hold);
   dets.forEach((d, di) => {
     if (dUsed.has(di)) return;
-    tracks.push({ id: nextId++, x: d.x, y: d.y, w: d.w, h: d.h, tx: d.x, ty: d.y, tw: d.w, th: d.h, missing: 0, fade: 0 });
+    const t = { id: nextId++, x: d.x, y: d.y, w: d.w, h: d.h, tx: d.x, ty: d.y, tw: d.w, th: d.h, missing: 0, fade: 0, hit: 0, hx: d.cx, hy: d.cy };
+    tracks.push(t);
+    queueHit(t); // every new shape plays its drum
   });
   const maxB = +$('maxBlobs').value;
   if (tracks.length > maxB) {
@@ -367,7 +415,122 @@ function easeTracks(dt) {
     t.h += (t.th - t.h) * a;
     const target = 1 - t.missing / (hold + 1);
     t.fade += (target - t.fade) * Math.min(1, dt * 8);
+    t.hit = Math.max(0, t.hit - dt * 4);
   }
+}
+
+// ---------- Drum machine ----------
+const DRUM_FOR_SHAPE = { square: 'kick', triangle: 'snare', circle: 'hat', diamond: 'clap', corners: 'tom', cross: 'rim' };
+let noiseBuf = null, hitQueue = [], lastStep = -1;
+
+function shapeOf(t) { const s = $('shape').value; return s === 'mixed' ? SHAPES[t.id % SHAPES.length] : s; }
+
+function getNoise() {
+  if (!noiseBuf) {
+    noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  return noiseBuf;
+}
+function env(g, t, peak, decay) {
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), t + 0.003);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+}
+function noiseSrc(t, dur) {
+  const s = actx.createBufferSource();
+  s.buffer = getNoise();
+  s.start(t); s.stop(t + dur);
+  return s;
+}
+function filt(type, f, q) { const b = actx.createBiquadFilter(); b.type = type; b.frequency.value = f; if (q) b.Q.value = q; return b; }
+
+// Synthesized drum sounds (no samples needed)
+function playDrum(type, vel, y01) {
+  if (!actx || !drumBus) return;
+  const t = actx.currentTime + 0.005;
+  const g = actx.createGain();
+  g.connect(drumBus);
+  switch (type) {
+    case 'kick': {
+      const o = actx.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+      o.connect(g); env(g, t, vel, 0.45); o.start(t); o.stop(t + 0.5);
+      break;
+    }
+    case 'snare': {
+      const n = noiseSrc(t, 0.25), f = filt('highpass', 1200);
+      n.connect(f); f.connect(g); env(g, t, vel * 0.7, 0.2);
+      const o = actx.createOscillator(), g2 = actx.createGain(); o.type = 'triangle'; o.frequency.value = 190;
+      o.connect(g2); g2.connect(drumBus); env(g2, t, vel * 0.5, 0.1); o.start(t); o.stop(t + 0.15);
+      break;
+    }
+    case 'hat': {
+      const n = noiseSrc(t, 0.08), f = filt('highpass', 7000);
+      n.connect(f); f.connect(g); env(g, t, vel * 0.4, 0.05);
+      break;
+    }
+    case 'clap': {
+      const n = noiseSrc(t, 0.3), f = filt('bandpass', 1500, 0.8);
+      n.connect(f); f.connect(g);
+      g.gain.setValueAtTime(0.0001, t);
+      [0, 0.012, 0.024].forEach(o => { g.gain.setValueAtTime(vel * 0.8, t + o); g.gain.exponentialRampToValueAtTime(0.05, t + o + 0.01); });
+      g.gain.setValueAtTime(vel * 0.7, t + 0.036); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+      break;
+    }
+    case 'tom': {
+      const base = 220 - y01 * 120; // higher on screen = higher pitch
+      const o = actx.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(base, t); o.frequency.exponentialRampToValueAtTime(base * 0.55, t + 0.25);
+      o.connect(g); env(g, t, vel * 0.8, 0.35); o.start(t); o.stop(t + 0.4);
+      break;
+    }
+    case 'rim': {
+      const o = actx.createOscillator(), f = filt('bandpass', 1700); o.type = 'square'; o.frequency.value = 820;
+      o.connect(f); f.connect(g); env(g, t, vel * 0.35, 0.04); o.start(t); o.stop(t + 0.06);
+      break;
+    }
+  }
+}
+
+function queueHit(t) {
+  if (!drumsOn() || video.paused || !actx) return;
+  hitQueue.push(t);
+  if ($('quant').value === '0') flushHits();
+}
+
+// Plays the waiting hits: at most one of each drum per step, the biggest shape wins
+function flushHits() {
+  if (!hitQueue.length) return;
+  const busy = +$('busy').value / 100;
+  const best = {};
+  for (const t of hitQueue) {
+    if (!tracks.includes(t)) continue;
+    const type = DRUM_FOR_SHAPE[shapeOf(t)];
+    const a = t.tw * t.th;
+    if (!best[type] || a > best[type].a) best[type] = { t, a };
+  }
+  hitQueue = [];
+  const frame = out.width * out.height;
+  for (const type in best) {
+    if (Math.random() > busy) continue;
+    const { t, a } = best[type];
+    const vel = 0.45 + 0.55 * Math.min(1, a / (frame * 0.04));
+    playDrum(type, vel, (t.ty + t.th / 2) / out.height);
+    t.hit = 1;
+    if (type === 'kick') pulse = 1;
+  }
+}
+
+// Steps through the beat grid at the chosen tempo
+function drumTick() {
+  if (!drumsOn() || !actx || video.paused) { hitQueue = []; return; }
+  const q = +$('quant').value;
+  if (!q) return;
+  const stepDur = 60 / +$('bpm').value * 4 / q;
+  const step = Math.floor(actx.currentTime / stepDur);
+  if (step !== lastStep) { lastStep = step; flushHits(); }
 }
 
 // ---------- Drawing ----------
@@ -406,7 +569,8 @@ function draw() {
   const dim = +$('dim').value / 100;
   if (dim > 0) { ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, out.width, out.height); }
 
-  const beatOn = $('beatMode').value !== 'off';
+  const drums = drumsOn();
+  const beatOn = $('beatMode').value !== 'off' || drums;
   const amt = beatOn ? +$('beatAmt').value / 100 : 0;
   const p = beatOn ? pulse : 0;
   const lw = Math.max(1, out.width / 960);
@@ -414,11 +578,12 @@ function draw() {
   ctx.fillStyle = '#fff';
   ctx.lineWidth = lw;
 
-  // Shape positions, swelling a little on each beat
-  const grow = 1 + 0.25 * amt * p;
+  // Shape positions, swelling on each beat (and on its own drum hit when the drum machine is on)
   const shown = tracks.filter(t => t.fade > 0.02).map(t => {
+    const tp = Math.max(p, drums ? t.hit : 0);
+    const grow = 1 + 0.25 * amt * tp;
     const w = t.w * grow, h = t.h * grow;
-    return { t, x: t.x + t.w / 2 - w / 2, y: t.y + t.h / 2 - h / 2, w, h, cx: t.x + t.w / 2, cy: t.y + t.h / 2 };
+    return { t, tp, x: t.x + t.w / 2 - w / 2, y: t.y + t.h / 2 - h / 2, w, h, cx: t.x + t.w / 2, cy: t.y + t.h / 2 };
   });
 
   // Connecting lines (dim between beats, bright on the beat)
@@ -440,10 +605,10 @@ function draw() {
 
   // Shapes, dots and labels
   const shapeSel = $('shape').value;
-  const shapeAlpha = 0.85 * (1 - amt) + amt * (0.5 + 0.5 * p);
   ctx.font = `${Math.round(11 * lw)}px monospace`;
   ctx.textBaseline = 'bottom';
   for (const s of shown) {
+    const shapeAlpha = 0.85 * (1 - amt) + amt * (0.5 + 0.5 * s.tp);
     ctx.globalAlpha = shapeAlpha * s.t.fade;
     drawShape(shapeSel === 'mixed' ? SHAPES[s.t.id % SHAPES.length] : shapeSel, s.x, s.y, s.w, s.h);
     ctx.globalAlpha = s.t.fade;
@@ -459,6 +624,7 @@ function loop(now) {
   const dt = Math.min(0.1, Math.max(0, (now - lastFrameT) / 1000));
   lastFrameT = now;
   audioTick(now, dt);
+  drumTick();
   $('beatLight').style.opacity = 0.1 + 0.9 * pulse;
 
   if (video.readyState >= 2) {
