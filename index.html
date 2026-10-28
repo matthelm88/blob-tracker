@@ -10,11 +10,12 @@
   body { margin: 0; background: #0b0b0b; color: #eee; font: 14px/1.4 system-ui, sans-serif; }
   header { padding: 12px 16px; border-bottom: 1px solid #222; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .08em; }
-  main { display: grid; grid-template-columns: 1fr 280px; gap: 16px; padding: 16px; }
+  main { display: grid; grid-template-columns: 1fr 290px; gap: 16px; padding: 16px; }
   @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
-  .stage { background: #000; display: flex; align-items: center; justify-content: center; min-height: 300px; border: 1px solid #222; }
+  .stage { background: #000; display: flex; align-items: center; justify-content: center; min-height: 300px; border: 1px solid #222; align-self: start; }
   canvas { max-width: 100%; height: auto; display: block; }
-  .panel { display: flex; flex-direction: column; gap: 14px; }
+  .panel { display: flex; flex-direction: column; gap: 12px; }
+  h2 { font-size: 11px; letter-spacing: .12em; color: #666; margin: 8px 0 0; font-weight: 600; border-top: 1px solid #222; padding-top: 10px; }
   label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #aaa; }
   label.check { flex-direction: row; align-items: center; gap: 8px; }
   .val { color: #fff; }
@@ -22,8 +23,9 @@
   button, select { background: #1c1c1c; color: #eee; border: 1px solid #333; padding: 8px 10px; border-radius: 6px; font: inherit; cursor: pointer; }
   button:hover { border-color: #666; }
   button.rec { border-color: #a33; }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .hint { color: #777; font-size: 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .hint { color: #777; font-size: 12px; margin: 0; }
+  #beatLight { width: 14px; height: 14px; border-radius: 50%; background: #fff; opacity: .1; border: 1px solid #555; }
 </style>
 </head>
 <body>
@@ -38,7 +40,10 @@
     <div class="row">
       <button id="play">Play / Pause</button>
       <button id="rec" class="rec">● Record</button>
+      <button id="reset">Reset to default</button>
     </div>
+
+    <h2>DETECTION</h2>
     <label>Detection mode
       <select id="mode">
         <option value="motion">Motion (things that move)</option>
@@ -46,34 +51,117 @@
       </select>
     </label>
     <label>Threshold: <span class="val" id="thresholdV"></span>
-      <input type="range" id="threshold" min="5" max="250" value="30">
+      <input type="range" id="threshold" min="5" max="250">
     </label>
     <label>Smallest blob size: <span class="val" id="minSizeV"></span>
-      <input type="range" id="minSize" min="1" max="300" value="20">
+      <input type="range" id="minSize" min="1" max="300">
     </label>
     <label>Max blobs: <span class="val" id="maxBlobsV"></span>
-      <input type="range" id="maxBlobs" min="1" max="60" value="16">
-    </label>
-    <label>Link distance (% of width): <span class="val" id="linkDistV"></span>
-      <input type="range" id="linkDist" min="0" max="60" value="20">
+      <input type="range" id="maxBlobs" min="1" max="60">
     </label>
     <label>Detection detail: <span class="val" id="detailV"></span>
-      <input type="range" id="detail" min="60" max="320" value="160">
+      <input type="range" id="detail" min="60" max="320">
+    </label>
+
+    <h2>CALM / FLASHING</h2>
+    <label>Smoothing (higher = slower, calmer): <span class="val" id="smoothV"></span>
+      <input type="range" id="smooth" min="0" max="100">
+    </label>
+    <label>Hold (frames a blob stays after it's lost): <span class="val" id="holdV"></span>
+      <input type="range" id="hold" min="0" max="60">
+    </label>
+
+    <h2>LOOK</h2>
+    <label>Shape
+      <select id="shape">
+        <option value="mixed">Mixed</option>
+        <option value="square">Square</option>
+        <option value="circle">Circle</option>
+        <option value="corners">Corner brackets</option>
+        <option value="cross">Crosshair</option>
+        <option value="triangle">Triangle</option>
+        <option value="diamond">Diamond</option>
+      </select>
+    </label>
+    <label>Connecting lines
+      <select id="linkMode">
+        <option value="chain">Chain (each shape to the next)</option>
+        <option value="nearby">Nearby only</option>
+        <option value="web">Web (everything to everything)</option>
+        <option value="off">Off</option>
+      </select>
+    </label>
+    <label>Nearby distance (% of width): <span class="val" id="linkDistV"></span>
+      <input type="range" id="linkDist" min="0" max="60">
     </label>
     <label>Darken video (%): <span class="val" id="dimV"></span>
-      <input type="range" id="dim" min="0" max="100" value="20">
+      <input type="range" id="dim" min="0" max="100">
     </label>
-    <label class="check"><input type="checkbox" id="labels" checked> Show labels</label>
-    <p class="hint">Motion mode finds moving people and hands. Brightness mode finds lights and bright areas. Raise the threshold or the smallest blob size if you get too many blobs.</p>
+    <label class="check"><input type="checkbox" id="labels"> Show labels</label>
+
+    <h2>SOUND</h2>
+    <label>Beat sync
+      <select id="beatMode">
+        <option value="pulse">Pulse (flash on the beat)</option>
+        <option value="jump">Pulse + move on the beat</option>
+        <option value="off">Off</option>
+      </select>
+    </label>
+    <label>Beat sensitivity: <span class="val" id="beatSensV"></span>
+      <input type="range" id="beatSens" min="0" max="100">
+    </label>
+    <label>Beat strength: <span class="val" id="beatAmtV"></span>
+      <input type="range" id="beatAmt" min="0" max="100">
+    </label>
+    <label>Volume: <span class="val" id="volumeV"></span>
+      <input type="range" id="volume" min="0" max="100">
+    </label>
+    <div class="row"><div id="beatLight"></div><span class="hint">Lights up on each detected beat</span></div>
+    <p class="hint">Your settings are remembered in this browser. Reset to default brings back the starting look.</p>
   </div>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
+
+// ---------- Settings ----------
+const DEFAULTS = {
+  mode: 'motion', threshold: 25, minSize: 12, maxBlobs: 24, detail: 160,
+  smooth: 70, hold: 10,
+  shape: 'mixed', linkMode: 'chain', linkDist: 25, dim: 25, labels: true,
+  beatMode: 'pulse', beatSens: 50, beatAmt: 60, volume: 80
+};
+const SETTING_IDS = Object.keys(DEFAULTS);
+const STORE_KEY = 'blobTrackerSettings';
+
+function refreshLabels() {
+  document.querySelectorAll('input[type=range]').forEach(el => {
+    const v = $(el.id + 'V');
+    if (v) v.textContent = el.value;
+  });
+}
+function getSettings() {
+  const s = {};
+  for (const id of SETTING_IDS) { const el = $(id); s[id] = el.type === 'checkbox' ? el.checked : el.value; }
+  return s;
+}
+function applySettings(s) {
+  for (const id of SETTING_IDS) {
+    if (!(id in s)) continue;
+    const el = $(id);
+    if (el.type === 'checkbox') el.checked = !!s[id]; else el.value = s[id];
+  }
+  refreshLabels();
+  setVolume();
+}
+function saveSettings() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(getSettings())); } catch (e) {}
+}
+
+// ---------- Video + canvas ----------
 const out = $('out');
 const ctx = out.getContext('2d');
 const video = document.createElement('video');
-video.muted = true;
 video.playsInline = true;
 video.loop = true;
 
@@ -81,22 +169,70 @@ const small = document.createElement('canvas');
 const sctx = small.getContext('2d', { willReadFrequently: true });
 
 let prevGray = null;
-let blobs = [];
+let tracks = [];
+let latestDets = [];
 let nextId = 1;
 let lastTime = -1;
 let recorder = null;
 let chunks = [];
 
-// Show slider values next to their labels
-['threshold', 'minSize', 'maxBlobs', 'linkDist', 'detail', 'dim'].forEach(id => {
-  const el = $(id), v = $(id + 'V');
-  const upd = () => { v.textContent = el.value; };
-  el.addEventListener('input', upd);
-  upd();
+// ---------- Audio ----------
+let actx = null, analyser = null, gainNode = null, audioDest = null, freq = null;
+let energyAvg = 0, lastBeat = 0, pulse = 0;
+
+function initAudio() {
+  if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
+  try {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = actx.createMediaElementSource(video);
+    analyser = actx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.2;
+    gainNode = actx.createGain();
+    audioDest = actx.createMediaStreamDestination();
+    src.connect(analyser);
+    src.connect(gainNode);
+    gainNode.connect(actx.destination);
+    src.connect(audioDest);
+    freq = new Uint8Array(analyser.frequencyBinCount);
+    setVolume();
+  } catch (e) { console.warn('Audio not available', e); }
+}
+function setVolume() { if (gainNode) gainNode.gain.value = +$('volume').value / 100; }
+
+function onBeat() {
+  pulse = 1;
+  if ($('beatMode').value === 'jump') updateTracks(latestDets);
+}
+
+// Watches the low (kick drum / bass) frequencies and fires on sudden jumps
+function audioTick(now, dt) {
+  pulse = Math.max(0, pulse - dt * 3.5);
+  if (!analyser || video.paused || $('beatMode').value === 'off') return;
+  analyser.getByteFrequencyData(freq);
+  const binHz = actx.sampleRate / analyser.fftSize;
+  const lo = Math.max(1, Math.floor(40 / binHz)), hi = Math.ceil(160 / binHz);
+  let e = 0;
+  for (let i = lo; i <= hi; i++) e += freq[i];
+  e /= (hi - lo + 1) * 255;
+  const sens = +$('beatSens').value / 100;
+  const ratio = 1.6 - sens * 0.5;
+  if (e > energyAvg * ratio && e > 0.08 && now - lastBeat > 120) { lastBeat = now; onBeat(); }
+  energyAvg = energyAvg * 0.94 + e * 0.06;
+}
+
+// ---------- Controls ----------
+document.querySelectorAll('input, select').forEach(el => {
+  if (el.id === 'file') return;
+  el.addEventListener('input', () => { refreshLabels(); saveSettings(); });
+  el.addEventListener('change', saveSettings);
 });
 $('detail').addEventListener('input', () => { prevGray = null; });
-$('mode').addEventListener('change', () => { prevGray = null; blobs = []; });
+$('mode').addEventListener('change', () => { prevGray = null; tracks = []; });
+$('volume').addEventListener('input', setVolume);
+$('reset').onclick = () => { applySettings(DEFAULTS); saveSettings(); prevGray = null; tracks = []; };
 
+$('file').addEventListener('click', initAudio);
 $('file').addEventListener('change', e => {
   const f = e.target.files[0];
   if (!f) return;
@@ -104,17 +240,18 @@ $('file').addEventListener('change', e => {
   video.onloadedmetadata = () => {
     out.width = video.videoWidth;
     out.height = video.videoHeight;
-    prevGray = null;
-    blobs = [];
-    lastTime = -1;
-    video.play();
+    prevGray = null; tracks = []; lastTime = -1; energyAvg = 0;
+    video.play().catch(() => { $('status').textContent = 'Press Play / Pause to start.'; });
     $('status').textContent = `${f.name}: ${video.videoWidth}×${video.videoHeight}`;
   };
 });
+$('play').onclick = () => {
+  if (!video.src) return;
+  initAudio();
+  video.paused ? video.play() : video.pause();
+};
 
-$('play').onclick = () => { if (!video.src) return; video.paused ? video.play() : video.pause(); };
-
-// Find blobs in the current frame
+// ---------- Blob detection ----------
 function detect() {
   const w = +$('detail').value;
   const h = Math.max(1, Math.round(w * video.videoHeight / video.videoWidth));
@@ -126,9 +263,8 @@ function detect() {
   for (let i = 0, j = 0; i < n; i++, j += 4) gray[i] = (px[j] * 77 + px[j + 1] * 150 + px[j + 2] * 29) >> 8;
 
   const th = +$('threshold').value;
-  const mode = $('mode').value;
   const mask = new Uint8Array(n);
-  if (mode === 'motion') {
+  if ($('mode').value === 'motion') {
     if (!prevGray) { prevGray = gray; return []; }
     for (let i = 0; i < n; i++) mask[i] = Math.abs(gray[i] - prevGray[i]) > th ? 1 : 0;
   } else {
@@ -157,11 +293,11 @@ function detect() {
     let top = 0;
     stack[top++] = s;
     seen[s] = 1;
-    let minX = w, minY = h, maxX = 0, maxY = 0, sx = 0, sy = 0, area = 0;
+    let minX = w, minY = h, maxX = 0, maxY = 0, area = 0;
     while (top) {
       const i = stack[--top];
       const x = i % w, y = (i / w) | 0;
-      area++; sx += x; sy += y;
+      area++;
       if (x < minX) minX = x;
       if (x > maxX) maxX = x;
       if (y < minY) minY = y;
@@ -171,96 +307,183 @@ function detect() {
       if (y > 0 && m[i - w] && !seen[i - w]) { seen[i - w] = 1; stack[top++] = i - w; }
       if (y < h - 1 && m[i + w] && !seen[i + w]) { seen[i + w] = 1; stack[top++] = i + w; }
     }
-    found.push({ minX, minY, maxX, maxY, cx: sx / area, cy: sy / area, area });
+    found.push({ minX, minY, maxX, maxY, area });
   }
 
-  const minSize = +$('minSize').value;
-  const maxB = +$('maxBlobs').value;
   const kx = out.width / w, ky = out.height / h;
   return found
-    .filter(b => b.area >= minSize)
+    .filter(b => b.area >= +$('minSize').value)
     .sort((a, b) => b.area - a.area)
-    .slice(0, maxB)
-    .map(b => ({
-      x: b.minX * kx, y: b.minY * ky,
-      w: (b.maxX - b.minX + 1) * kx, h: (b.maxY - b.minY + 1) * ky,
-      cx: (b.cx + 0.5) * kx, cy: (b.cy + 0.5) * ky
-    }));
+    .slice(0, +$('maxBlobs').value)
+    .map(b => {
+      const x = b.minX * kx, y = b.minY * ky;
+      const bw = (b.maxX - b.minX + 1) * kx, bh = (b.maxY - b.minY + 1) * ky;
+      return { x, y, w: bw, h: bh, cx: x + bw / 2, cy: y + bh / 2 };
+    });
 }
 
-// Keep blob numbers steady by matching each blob to the nearest one from the last frame
-function assignIds(cur, prev) {
-  const used = new Set();
-  const maxD = out.width * 0.08;
-  for (const b of cur) {
-    let best = null, bd = maxD;
-    for (const p of prev) {
-      if (used.has(p.id)) continue;
-      const d = Math.hypot(p.cx - b.cx, p.cy - b.cy);
-      if (d < bd) { bd = d; best = p; }
-    }
-    if (best) { b.id = best.id; used.add(best.id); } else { b.id = nextId++; }
+// ---------- Tracking (keeps shapes steady instead of flashing) ----------
+function updateTracks(dets) {
+  const maxD = out.width * 0.12;
+  const pairs = [];
+  dets.forEach((d, di) => tracks.forEach((t, ti) => {
+    const dist = Math.hypot(t.tx + t.tw / 2 - d.cx, t.ty + t.th / 2 - d.cy);
+    if (dist < maxD) pairs.push([dist, di, ti]);
+  }));
+  pairs.sort((a, b) => a[0] - b[0]);
+  const dUsed = new Set(), tUsed = new Set();
+  for (const [, di, ti] of pairs) {
+    if (dUsed.has(di) || tUsed.has(ti)) continue;
+    dUsed.add(di); tUsed.add(ti);
+    const t = tracks[ti], d = dets[di];
+    t.tx = d.x; t.ty = d.y; t.tw = d.w; t.th = d.h;
+    t.missing = 0;
   }
+  tracks.forEach((t, ti) => { if (!tUsed.has(ti)) t.missing++; });
+  const hold = +$('hold').value;
+  tracks = tracks.filter(t => t.missing <= hold);
+  dets.forEach((d, di) => {
+    if (dUsed.has(di)) return;
+    tracks.push({ id: nextId++, x: d.x, y: d.y, w: d.w, h: d.h, tx: d.x, ty: d.y, tw: d.w, th: d.h, missing: 0, fade: 0 });
+  });
+  const maxB = +$('maxBlobs').value;
+  if (tracks.length > maxB) {
+    tracks.sort((a, b) => a.missing - b.missing || a.id - b.id);
+    tracks = tracks.slice(0, maxB);
+  }
+  tracks.sort((a, b) => a.id - b.id);
+}
+
+// Glide each shape toward where its blob is now
+function easeTracks(dt) {
+  const smooth = +$('smooth').value / 100;
+  const f = 1 - smooth * 0.97;
+  const a = 1 - Math.pow(1 - f, dt * 60);
+  const hold = +$('hold').value;
+  for (const t of tracks) {
+    t.x += (t.tx - t.x) * a;
+    t.y += (t.ty - t.y) * a;
+    t.w += (t.tw - t.w) * a;
+    t.h += (t.th - t.h) * a;
+    const target = 1 - t.missing / (hold + 1);
+    t.fade += (target - t.fade) * Math.min(1, dt * 8);
+  }
+}
+
+// ---------- Drawing ----------
+const SHAPES = ['square', 'circle', 'corners', 'cross', 'triangle', 'diamond'];
+
+function drawShape(type, x, y, w, h) {
+  const cx = x + w / 2, cy = y + h / 2;
+  ctx.beginPath();
+  switch (type) {
+    case 'square': ctx.rect(x, y, w, h); break;
+    case 'circle': ctx.ellipse(cx, cy, w / 2, h / 2, 0, 0, Math.PI * 2); break;
+    case 'triangle': ctx.moveTo(cx, y); ctx.lineTo(x + w, y + h); ctx.lineTo(x, y + h); ctx.closePath(); break;
+    case 'diamond': ctx.moveTo(cx, y); ctx.lineTo(x + w, cy); ctx.lineTo(cx, y + h); ctx.lineTo(x, cy); ctx.closePath(); break;
+    case 'corners': {
+      const L = Math.min(w, h) * 0.3;
+      ctx.moveTo(x, y + L); ctx.lineTo(x, y); ctx.lineTo(x + L, y);
+      ctx.moveTo(x + w - L, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + L);
+      ctx.moveTo(x + w, y + h - L); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - L, y + h);
+      ctx.moveTo(x + L, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - L);
+      break;
+    }
+    case 'cross': {
+      const r = Math.min(w, h) * 0.2;
+      ctx.moveTo(x, cy); ctx.lineTo(x + w, cy);
+      ctx.moveTo(cx, y); ctx.lineTo(cx, y + h);
+      ctx.moveTo(cx + r, cy); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      break;
+    }
+  }
+  ctx.stroke();
 }
 
 function draw() {
+  ctx.globalAlpha = 1;
   ctx.drawImage(video, 0, 0, out.width, out.height);
   const dim = +$('dim').value / 100;
   if (dim > 0) { ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, out.width, out.height); }
 
+  const beatOn = $('beatMode').value !== 'off';
+  const amt = beatOn ? +$('beatAmt').value / 100 : 0;
+  const p = beatOn ? pulse : 0;
   const lw = Math.max(1, out.width / 960);
   ctx.strokeStyle = '#fff';
   ctx.fillStyle = '#fff';
   ctx.lineWidth = lw;
 
-  // Lines between nearby blobs
-  const link = +$('linkDist').value / 100 * out.width;
-  ctx.globalAlpha = 0.6;
-  ctx.beginPath();
-  for (let i = 0; i < blobs.length; i++) for (let j = i + 1; j < blobs.length; j++) {
-    const a = blobs[i], b = blobs[j];
-    if (Math.hypot(a.cx - b.cx, a.cy - b.cy) < link) { ctx.moveTo(a.cx, a.cy); ctx.lineTo(b.cx, b.cy); }
+  // Shape positions, swelling a little on each beat
+  const grow = 1 + 0.25 * amt * p;
+  const shown = tracks.filter(t => t.fade > 0.02).map(t => {
+    const w = t.w * grow, h = t.h * grow;
+    return { t, x: t.x + t.w / 2 - w / 2, y: t.y + t.h / 2 - h / 2, w, h, cx: t.x + t.w / 2, cy: t.y + t.h / 2 };
+  });
+
+  // Connecting lines (dim between beats, bright on the beat)
+  const lineAlpha = 0.6 * (1 - amt) + amt * (0.15 + 0.85 * p);
+  const linkMode = $('linkMode').value;
+  const linkDist = +$('linkDist').value / 100 * out.width;
+  const link = (a, b) => {
+    ctx.globalAlpha = lineAlpha * Math.min(a.t.fade, b.t.fade);
+    ctx.beginPath(); ctx.moveTo(a.cx, a.cy); ctx.lineTo(b.cx, b.cy); ctx.stroke();
+  };
+  if (linkMode === 'chain') {
+    for (let i = 0; i < shown.length - 1; i++) link(shown[i], shown[i + 1]);
+  } else if (linkMode === 'nearby' || linkMode === 'web') {
+    for (let i = 0; i < shown.length; i++) for (let j = i + 1; j < shown.length; j++) {
+      const a = shown[i], b = shown[j];
+      if (linkMode === 'web' || Math.hypot(a.cx - b.cx, a.cy - b.cy) < linkDist) link(a, b);
+    }
   }
-  ctx.stroke();
+
+  // Shapes, dots and labels
+  const shapeSel = $('shape').value;
+  const shapeAlpha = 0.85 * (1 - amt) + amt * (0.5 + 0.5 * p);
+  ctx.font = `${Math.round(11 * lw)}px monospace`;
+  ctx.textBaseline = 'bottom';
+  for (const s of shown) {
+    ctx.globalAlpha = shapeAlpha * s.t.fade;
+    drawShape(shapeSel === 'mixed' ? SHAPES[s.t.id % SHAPES.length] : shapeSel, s.x, s.y, s.w, s.h);
+    ctx.globalAlpha = s.t.fade;
+    ctx.beginPath(); ctx.arc(s.cx, s.cy, 2.5 * lw, 0, Math.PI * 2); ctx.fill();
+    if ($('labels').checked) ctx.fillText(`#${s.t.id}  ${Math.round(s.cx)},${Math.round(s.cy)}`, s.x, s.y - 2 * lw);
+  }
   ctx.globalAlpha = 1;
-
-  // Boxes
-  for (const b of blobs) ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w, b.h);
-
-  // Centre dots
-  const r = 2.5 * lw;
-  for (const b of blobs) { ctx.beginPath(); ctx.arc(b.cx, b.cy, r, 0, Math.PI * 2); ctx.fill(); }
-
-  // Labels
-  if ($('labels').checked) {
-    ctx.font = `${Math.round(11 * lw)}px monospace`;
-    ctx.textBaseline = 'bottom';
-    for (const b of blobs) ctx.fillText(`#${b.id}  ${Math.round(b.cx)},${Math.round(b.cy)}`, b.x, b.y - 2 * lw);
-  }
 }
 
-function loop() {
+// ---------- Main loop ----------
+let lastFrameT = performance.now();
+function loop(now) {
+  const dt = Math.min(0.1, Math.max(0, (now - lastFrameT) / 1000));
+  lastFrameT = now;
+  audioTick(now, dt);
+  $('beatLight').style.opacity = 0.1 + 0.9 * pulse;
+
   if (video.readyState >= 2) {
     const newFrame = video.currentTime !== lastTime;
-    // Only detect on a new video frame (motion), or anytime in brightness mode so sliders update while paused
     if (newFrame || $('mode').value === 'bright') {
       lastTime = video.currentTime;
-      const nb = detect();
-      assignIds(nb, blobs);
-      blobs = nb;
+      latestDets = detect();
+      // In "move on the beat" mode shapes only jump on beats, unless no beats are heard for a while
+      const waitForBeat = $('beatMode').value === 'jump' && now - lastBeat < 1500;
+      if (!waitForBeat) updateTracks(latestDets);
     }
+    easeTracks(dt);
     draw();
   }
   requestAnimationFrame(loop);
 }
-requestAnimationFrame(loop);
 
-// Record the canvas and download it
+// ---------- Recording (now with sound) ----------
 $('rec').onclick = () => {
   if (recorder) { recorder.stop(); return; }
   if (!video.src) return;
+  initAudio();
   const stream = out.captureStream(30);
-  const type = ['video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+  if (audioDest) audioDest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
+  const type = ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
     .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
   recorder = new MediaRecorder(stream, type ? { mimeType: type, videoBitsPerSecond: 12e6 } : {});
   chunks = [];
@@ -277,10 +500,19 @@ $('rec').onclick = () => {
   };
   video.currentTime = 0;
   prevGray = null;
+  tracks = [];
   video.play();
   recorder.start();
   $('rec').textContent = '■ Stop';
 };
+
+// ---------- Start ----------
+applySettings(DEFAULTS);
+try {
+  const saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+  if (saved) applySettings(saved);
+} catch (e) {}
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>
