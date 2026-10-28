@@ -39,7 +39,7 @@
   <div class="panel">
     <div class="row">
       <button id="play">Play / Pause</button>
-      <button id="rec" class="rec">● Record</button>
+      <button id="exportBtn" class="rec">⇩ Export .mov</button>
       <button id="reset">Reset to default</button>
     </div>
 
@@ -99,8 +99,8 @@
     </label>
     <label class="check"><input type="checkbox" id="labels"> Show labels</label>
 
-    <h2>DRUM MACHINE</h2>
-    <label>Shapes play drums
+    <h2>SOUND MACHINE</h2>
+    <label>Shapes make sound
       <select id="drums">
         <option value="off">Off</option>
         <option value="on">On</option>
@@ -124,10 +124,32 @@
     <label>Re-hit when a shape moves (% of width, 0 = only new shapes): <span class="val" id="moveHitV"></span>
       <input type="range" id="moveHit" min="0" max="30">
     </label>
-    <label>Drum volume: <span class="val" id="drumVolV"></span>
-      <input type="range" id="drumVol" min="0" max="100">
+    <h2>MIXER (0 = off)</h2>
+    <label>Drums: <span class="val" id="mixDrumsV"></span>
+      <input type="range" id="mixDrums" min="0" max="100">
     </label>
-    <p class="hint">Square = kick · Triangle = snare · Circle = hi-hat · Diamond = clap · Corners = tom (pitch by height) · Crosshair = rim. Use Shape: Mixed to hear the full kit. Bigger blobs hit harder.</p>
+    <label>Static: <span class="val" id="mixStaticV"></span>
+      <input type="range" id="mixStatic" min="0" max="100">
+    </label>
+    <label>Radio: <span class="val" id="mixRadioV"></span>
+      <input type="range" id="mixRadio" min="0" max="100">
+    </label>
+    <label>Vocal: <span class="val" id="mixVocalV"></span>
+      <input type="range" id="mixVocal" min="0" max="100">
+    </label>
+    <label>Strings: <span class="val" id="mixStringsV"></span>
+      <input type="range" id="mixStrings" min="0" max="100">
+    </label>
+    <label>Bubbles: <span class="val" id="mixBubblesV"></span>
+      <input type="range" id="mixBubbles" min="0" max="100">
+    </label>
+    <label>Organic: <span class="val" id="mixOrganicV"></span>
+      <input type="range" id="mixOrganic" min="0" max="100">
+    </label>
+    <label>Pops &amp; ticks: <span class="val" id="mixPopsV"></span>
+      <input type="range" id="mixPops" min="0" max="100">
+    </label>
+    <p class="hint">Every group gives each shape its own sound, so layering groups stacks them. Drums: square = kick, triangle = snare, circle = hi-hat, diamond = clap, corners = tom, crosshair = rim. Pitched sounds (vocal, strings, marimba, toms) go higher the higher the shape is on screen. Bigger blobs hit harder. Use Shape: Mixed to hear every sound in a group.</p>
 
     <h2>SOUND</h2>
     <label>Beat sync
@@ -159,7 +181,8 @@ const DEFAULTS = {
   mode: 'motion', threshold: 25, minSize: 12, maxBlobs: 24, detail: 160,
   smooth: 70, hold: 10,
   shape: 'mixed', linkMode: 'chain', linkDist: 25, dim: 25, labels: true,
-  drums: 'off', muteOrig: true, bpm: 120, quant: '16', busy: 75, moveHit: 6, drumVol: 80,
+  drums: 'off', muteOrig: true, bpm: 120, quant: '16', busy: 75, moveHit: 6,
+  mixDrums: 80, mixStatic: 0, mixRadio: 0, mixVocal: 0, mixStrings: 0, mixBubbles: 0, mixOrganic: 0, mixPops: 0,
   beatMode: 'pulse', beatSens: 50, beatAmt: 60, volume: 80
 };
 const SETTING_IDS = Object.keys(DEFAULTS);
@@ -204,8 +227,6 @@ let tracks = [];
 let latestDets = [];
 let nextId = 1;
 let lastTime = -1;
-let recorder = null;
-let chunks = [];
 
 // ---------- Audio ----------
 let actx = null, analyser = null, origGain = null, drumBus = null, masterGain = null, audioDest = null, freq = null;
@@ -230,16 +251,22 @@ function initAudio() {
     drumBus.connect(masterGain);
     masterGain.connect(actx.destination);
     masterGain.connect(audioDest);
+    // One channel per sound group, all feeding the sound machine bus
+    for (const g of GROUP_NAMES) { groupGains[g] = actx.createGain(); groupGains[g].connect(drumBus); }
     freq = new Uint8Array(analyser.frequencyBinCount);
     updateGains();
   } catch (e) { console.warn('Audio not available', e); }
 }
+const GROUP_NAMES = ['Drums', 'Static', 'Radio', 'Vocal', 'Strings', 'Bubbles', 'Organic', 'Pops'];
+const groupGains = {};
+function mixOf(g) { return +$('mix' + g).value / 100; }
 function drumsOn() { return $('drums').value === 'on'; }
 function updateGains() {
   if (!actx) return;
   masterGain.gain.value = +$('volume').value / 100;
   origGain.gain.value = (drumsOn() && $('muteOrig').checked) ? 0 : 1;
-  drumBus.gain.value = drumsOn() ? +$('drumVol').value / 100 : 0;
+  drumBus.gain.value = drumsOn() ? 1 : 0;
+  for (const g of GROUP_NAMES) if (groupGains[g]) groupGains[g].gain.value = mixOf(g);
 }
 
 function onBeat() {
@@ -279,6 +306,7 @@ $('file').addEventListener('click', initAudio);
 $('file').addEventListener('change', e => {
   const f = e.target.files[0];
   if (!f) return;
+  loadedName = f.name;
   video.src = URL.createObjectURL(f);
   video.onloadedmetadata = () => {
     out.width = video.videoWidth;
@@ -419,8 +447,7 @@ function easeTracks(dt) {
   }
 }
 
-// ---------- Drum machine ----------
-const DRUM_FOR_SHAPE = { square: 'kick', triangle: 'snare', circle: 'hat', diamond: 'clap', corners: 'tom', cross: 'rim' };
+// ---------- Sound machine ----------
 let noiseBuf = null, hitQueue = [], lastStep = -1;
 
 function shapeOf(t) { const s = $('shape').value; return s === 'mixed' ? SHAPES[t.id % SHAPES.length] : s; }
@@ -446,51 +473,151 @@ function noiseSrc(t, dur) {
 }
 function filt(type, f, q) { const b = actx.createBiquadFilter(); b.type = type; b.frequency.value = f; if (q) b.Q.value = q; return b; }
 
-// Synthesized drum sounds (no samples needed)
-function playDrum(type, vel, y01) {
-  if (!actx || !drumBus) return;
-  const t = actx.currentTime + 0.005;
+// ---------- Sound building blocks ----------
+// A gain envelope: quick rise to `peak` over `atk` seconds, then fade out over `dec` seconds
+function vGain(dest, t, peak, atk, dec) {
   const g = actx.createGain();
-  g.connect(drumBus);
-  switch (type) {
-    case 'kick': {
-      const o = actx.createOscillator(); o.type = 'sine';
-      o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
-      o.connect(g); env(g, t, vel, 0.45); o.start(t); o.stop(t + 0.5);
-      break;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), t + atk);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + atk + dec);
+  g.connect(dest);
+  return g;
+}
+// An oscillator note, optionally sliding from f0 to f1, optionally through a filter
+function tone(dest, type, f0, f1, t, peak, atk, dec, fl) {
+  const o = actx.createOscillator();
+  o.type = type;
+  o.frequency.setValueAtTime(f0, t);
+  if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + atk + dec);
+  const g = vGain(dest, t, peak, atk, dec);
+  if (fl) { o.connect(fl); fl.connect(g); } else o.connect(g);
+  o.start(t); o.stop(t + atk + dec + 0.05);
+  return o;
+}
+// A filtered noise burst, optionally sweeping the filter from f to f1
+function noise(dest, t, peak, atk, dec, ftype, f, q, f1) {
+  const s = noiseSrc(t, atk + dec + 0.05);
+  const fl = filt(ftype, f, q);
+  if (f1) { fl.frequency.setValueAtTime(f, t); fl.frequency.exponentialRampToValueAtTime(f1, t + atk + dec); }
+  const g = vGain(dest, t, peak, atk, dec);
+  s.connect(fl); fl.connect(g);
+}
+// Height on screen picks a note from a minor pentatonic scale (higher = higher note)
+function note(y01, base) {
+  const SC = [0, 3, 5, 7, 10];
+  const i = Math.max(0, Math.min(9, Math.floor((1 - y01) * 10)));
+  return base * Math.pow(2, (Math.floor(i / 5) * 12 + SC[i % 5]) / 12);
+}
+// Adds slow vibrato to an oscillator
+function vibrato(o, t, depth, rate, dur) {
+  const l = actx.createOscillator(), lg = actx.createGain();
+  l.frequency.value = rate; lg.gain.value = depth;
+  l.connect(lg); lg.connect(o.frequency);
+  l.start(t); l.stop(t + dur);
+}
+
+// ---------- Sound groups ----------
+// Each group gives every shape its own sound: (shape, velocity 0-1, height 0-1 (0 = top), start time, output)
+const GROUPS = {
+  Drums(s, v, y, t, d) {
+    switch (s) {
+      case 'square': tone(d, 'sine', 150, 42, t, v, 0.003, 0.45); break;                                   // kick
+      case 'triangle': noise(d, t, v * 0.7, 0.002, 0.2, 'highpass', 1200); tone(d, 'triangle', 190, 0, t, v * 0.5, 0.002, 0.1); break; // snare
+      case 'circle': noise(d, t, v * 0.4, 0.002, 0.05, 'highpass', 7000); break;                           // hi-hat
+      case 'diamond': [0, 0.012, 0.024].forEach(o => noise(d, t + o, v * 0.6, 0.001, 0.03, 'bandpass', 1500, 0.8));
+        noise(d, t + 0.036, v * 0.6, 0.001, 0.22, 'bandpass', 1500, 0.8); break;                           // clap
+      case 'corners': { const b = 220 - y * 120; tone(d, 'sine', b, b * 0.55, t, v * 0.8, 0.003, 0.35); break; } // tom
+      case 'cross': tone(d, 'square', 820, 0, t, v * 0.35, 0.001, 0.04, filt('bandpass', 1700)); break;   // rim
     }
-    case 'snare': {
-      const n = noiseSrc(t, 0.25), f = filt('highpass', 1200);
-      n.connect(f); f.connect(g); env(g, t, vel * 0.7, 0.2);
-      const o = actx.createOscillator(), g2 = actx.createGain(); o.type = 'triangle'; o.frequency.value = 190;
-      o.connect(g2); g2.connect(drumBus); env(g2, t, vel * 0.5, 0.1); o.start(t); o.stop(t + 0.15);
-      break;
+  },
+  Static(s, v, y, t, d) {
+    switch (s) {
+      case 'square': noise(d, t, v * 0.8, 0.01, 0.3, 'lowpass', 400); break;                               // low rumble
+      case 'circle': noise(d, t, v * 0.35, 0.005, 0.12, 'highpass', 5000); break;                          // hiss
+      case 'corners': for (let i = 0; i < 6; i++) noise(d, t + Math.random() * 0.2, v * 0.6, 0.001, 0.01, 'bandpass', 3000, 2); break; // crackle
+      case 'cross': noise(d, t, v * 0.5, 0.01, 0.25, 'bandpass', 2000, 0.5); break;                        // TV static
+      case 'triangle': noise(d, t, v * 0.4, 0.002, 0.15, 'allpass', 1000); break;                          // white burst
+      case 'diamond': noise(d, t, v * 0.6, 0.01, 0.3, 'bandpass', 500, 3, 6000); break;                    // sweep
     }
-    case 'hat': {
-      const n = noiseSrc(t, 0.08), f = filt('highpass', 7000);
-      n.connect(f); f.connect(g); env(g, t, vel * 0.4, 0.05);
-      break;
+  },
+  Radio(s, v, y, t, d) {
+    switch (s) {
+      case 'square': tone(d, 'sine', 600, 1800, t, v * 0.3, 0.02, 0.3); noise(d, t, v * 0.2, 0.02, 0.3, 'bandpass', 1500, 1); break; // tuning whistle
+      case 'circle': tone(d, 'sine', 1000, 0, t, v * 0.3, 0.003, 0.08); break;                             // pip
+      case 'corners': [0, 0.07, 0.14].forEach(o => tone(d, 'sine', 700, 0, t + o, v * 0.3, 0.003, 0.04)); break; // morse
+      case 'cross': tone(d, 'sine', 900, 0, t, v * 0.2, 0.02, 0.4); tone(d, 'sine', 913, 0, t, v * 0.2, 0.02, 0.4); break; // heterodyne beating
+      case 'triangle': tone(d, 'square', 220, 0, t, v * 0.25, 0.005, 0.2, filt('bandpass', 1500, 5)); break; // telephone buzz
+      case 'diamond': tone(d, 'sine', 2000, 300, t, v * 0.3, 0.005, 0.25); break;                          // scanning chirp
     }
-    case 'clap': {
-      const n = noiseSrc(t, 0.3), f = filt('bandpass', 1500, 0.8);
-      n.connect(f); f.connect(g);
-      g.gain.setValueAtTime(0.0001, t);
-      [0, 0.012, 0.024].forEach(o => { g.gain.setValueAtTime(vel * 0.8, t + o); g.gain.exponentialRampToValueAtTime(0.05, t + o + 0.01); });
-      g.gain.setValueAtTime(vel * 0.7, t + 0.036); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
-      break;
+  },
+  Vocal(s, v, y, t, d) {
+    const VOWELS = { square: [325, 700], circle: [300, 2300], corners: [400, 2000], triangle: [800, 1150], diamond: [450, 800] };
+    const f0 = note(y, 110);
+    if (s === 'cross') { // hum "mmm"
+      const o = tone(d, 'sawtooth', f0, 0, t, v * 0.5, 0.05, 0.4, filt('lowpass', 300));
+      vibrato(o, t, 3, 5, 0.5);
+      return;
     }
-    case 'tom': {
-      const base = 220 - y01 * 120; // higher on screen = higher pitch
-      const o = actx.createOscillator(); o.type = 'sine';
-      o.frequency.setValueAtTime(base, t); o.frequency.exponentialRampToValueAtTime(base * 0.55, t + 0.25);
-      o.connect(g); env(g, t, vel * 0.8, 0.35); o.start(t); o.stop(t + 0.4);
-      break;
+    const [f1, f2] = VOWELS[s];
+    const o = actx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f0;
+    vibrato(o, t, 4, 5.5, 0.5);
+    const g = vGain(d, t, v * 0.6, 0.03, 0.35);
+    [[f1, 8, 1], [f2, 10, 0.5]].forEach(([f, q, lvl]) => {
+      const b = filt('bandpass', f, q), bg = actx.createGain(); bg.gain.value = lvl * 3;
+      o.connect(b); b.connect(bg); bg.connect(g);
+    });
+    o.start(t); o.stop(t + 0.45);
+  },
+  Strings(s, v, y, t, d) {
+    switch (s) {
+      case 'square': { const f = note(y, 55); const fl = filt('lowpass', 3000); fl.frequency.setValueAtTime(3000, t); fl.frequency.exponentialRampToValueAtTime(300, t + 0.4); tone(d, 'sawtooth', f, 0, t, v * 0.5, 0.003, 0.4, fl); break; } // low pizzicato
+      case 'circle': { const f = note(y, 440); tone(d, 'sine', f, 0, t, v * 0.3, 0.003, 0.6); tone(d, 'sine', f * 2, 0, t, v * 0.12, 0.003, 0.4); break; } // harmonic
+      case 'corners': { const f = note(y, 110); const fl = filt('lowpass', 2500); fl.frequency.setValueAtTime(2500, t); fl.frequency.exponentialRampToValueAtTime(400, t + 0.3); tone(d, 'sawtooth', f, 0, t, v * 0.4, 0.003, 0.3, fl); break; } // pizzicato
+      case 'cross': { const o = tone(d, 'sawtooth', note(y, 220), 0, t, v * 0.25, 0.1, 0.6, filt('lowpass', 2000)); vibrato(o, t, 4, 6, 0.8); break; } // bowed
+      case 'triangle': { const f = note(y, 220); const fl = filt('lowpass', 5000); fl.frequency.setValueAtTime(5000, t); fl.frequency.exponentialRampToValueAtTime(500, t + 0.3); tone(d, 'square', f, 0, t, v * 0.25, 0.002, 0.3, fl); break; } // bright pluck
+      case 'diamond': { const f = note(y, 110); [-6, 6].forEach(c => tone(d, 'sawtooth', f * Math.pow(2, c / 1200), 0, t, v * 0.15, 0.25, 0.8, filt('lowpass', 1800))); break; } // swell
     }
-    case 'rim': {
-      const o = actx.createOscillator(), f = filt('bandpass', 1700); o.type = 'square'; o.frequency.value = 820;
-      o.connect(f); f.connect(g); env(g, t, vel * 0.35, 0.04); o.start(t); o.stop(t + 0.06);
-      break;
+  },
+  Bubbles(s, v, y, t, d) {
+    const bub = (o, f, dur, p) => tone(d, 'sine', f, f * 2.5, t + o, p, 0.003, dur);
+    switch (s) {
+      case 'square': bub(0, 200, 0.12, v * 0.6); break;                                       // big bubble
+      case 'circle': bub(0, 900, 0.05, v * 0.4); break;                                       // small bubble
+      case 'corners': [0, 0.06, 0.11].forEach((o, i) => bub(o, 500 + i * 150, 0.05, v * 0.4)); break; // bubble trail
+      case 'cross': for (let i = 0; i < 4; i++) bub(Math.random() * 0.25, 250 + Math.random() * 500, 0.06, v * 0.35); break; // gurgle
+      case 'triangle': bub(0, 500, 0.08, v * 0.5); break;                                     // medium bubble
+      case 'diamond': bub(0, 1200, 0.03, v * 0.4); noise(d, t + 0.03, v * 0.3, 0.001, 0.01, 'highpass', 3000); break; // bubble pop
     }
+  },
+  Organic(s, v, y, t, d) {
+    switch (s) {
+      case 'square': tone(d, 'sine', 180, 0, t, v * 0.7, 0.002, 0.08); noise(d, t, v * 0.4, 0.001, 0.03, 'bandpass', 800, 2); break; // wood knock
+      case 'circle': noise(d, t, v * 0.35, 0.02, 0.1, 'highpass', 4000); break;                // shaker
+      case 'corners': { const f = note(y, 220); tone(d, 'sine', f, 0, t, v * 0.5, 0.002, 0.5); tone(d, 'sine', f * 4, 0, t, v * 0.1, 0.002, 0.1); break; } // marimba
+      case 'cross': noise(d, t, v * 0.3, 0.15, 0.4, 'lowpass', 1200); break;                    // breath
+      case 'triangle': tone(d, 'sine', 1500, 700, t, v * 0.4, 0.002, 0.06); break;             // water plop
+      case 'diamond': tone(d, 'triangle', 600, 0, t, v * 0.4, 0.002, 0.15, filt('bandpass', 900, 2)); break; // bamboo
+    }
+  },
+  Pops(s, v, y, t, d) {
+    switch (s) {
+      case 'square': noise(d, t, v * 0.9, 0.001, 0.02, 'lowpass', 2000); break;                 // vinyl pop
+      case 'circle': tone(d, 'sine', 3000, 0, t, v * 0.3, 0.001, 0.01); break;                  // tick
+      case 'corners': tone(d, 'square', 1200, 0, t, v * 0.2, 0.001, 0.01); tone(d, 'square', 900, 0, t + 0.15, v * 0.2, 0.001, 0.01); break; // tick-tock
+      case 'cross': for (let i = 0; i < 3; i++) noise(d, t + Math.random() * 0.1, v * 0.5, 0.001, 0.005, 'highpass', 2000); break; // crackle
+      case 'triangle': tone(d, 'sine', 400, 80, t, v * 0.6, 0.001, 0.03); break;               // pop
+      case 'diamond': tone(d, 'square', 2000, 0, t, v * 0.15, 0.001, 0.015); break;            // blip
+    }
+  }
+};
+
+// Plays one shape's sound in every group that is turned up in the mixer
+function playShape(shape, vel, y01) {
+  if (!actx) return;
+  const t = actx.currentTime + 0.005;
+  for (const g of GROUP_NAMES) {
+    if (mixOf(g) <= 0) continue;
+    try { GROUPS[g](shape, vel, y01, t, groupGains[g]); } catch (e) { console.warn(g, e); }
   }
 }
 
@@ -500,26 +627,26 @@ function queueHit(t) {
   if ($('quant').value === '0') flushHits();
 }
 
-// Plays the waiting hits: at most one of each drum per step, the biggest shape wins
+// Plays the waiting hits: at most one of each shape per step, the biggest blob wins
 function flushHits() {
   if (!hitQueue.length) return;
   const busy = +$('busy').value / 100;
   const best = {};
   for (const t of hitQueue) {
     if (!tracks.includes(t)) continue;
-    const type = DRUM_FOR_SHAPE[shapeOf(t)];
+    const shape = shapeOf(t);
     const a = t.tw * t.th;
-    if (!best[type] || a > best[type].a) best[type] = { t, a };
+    if (!best[shape] || a > best[shape].a) best[shape] = { t, a };
   }
   hitQueue = [];
   const frame = out.width * out.height;
-  for (const type in best) {
+  for (const shape in best) {
     if (Math.random() > busy) continue;
-    const { t, a } = best[type];
+    const { t, a } = best[shape];
     const vel = 0.45 + 0.55 * Math.min(1, a / (frame * 0.04));
-    playDrum(type, vel, (t.ty + t.th / 2) / out.height);
+    playShape(shape, vel, (t.ty + t.th / 2) / out.height);
     t.hit = 1;
-    if (type === 'kick') pulse = 1;
+    if (shape === 'square') pulse = 1;
   }
 }
 
@@ -642,34 +769,144 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-// ---------- Recording (now with sound) ----------
-$('rec').onclick = () => {
-  if (recorder) { recorder.stop(); return; }
-  if (!video.src) return;
-  initAudio();
-  const stream = out.captureStream(30);
-  if (audioDest) audioDest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
-  const type = ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
-    .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
-  recorder = new MediaRecorder(stream, type ? { mimeType: type, videoBitsPerSecond: 12e6 } : {});
-  chunks = [];
-  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-  recorder.onstop = () => {
-    const mime = recorder.mimeType || 'video/webm';
-    const file = new Blob(chunks, { type: mime });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(file);
-    a.download = 'blob-tracked.' + (mime.includes('mp4') ? 'mp4' : 'webm');
-    a.click();
-    recorder = null;
-    $('rec').textContent = '● Record';
-  };
+// ---------- Export (.mov) ----------
+// Plays the video once from the start with the current settings and saves exactly what's on screen, with sound.
+let exporting = null;
+let loadedName = 'video';
+
+function setStatus(msg) { $('status').textContent = msg; }
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+async function rewind() {
+  video.pause();
   video.currentTime = 0;
-  prevGray = null;
-  tracks = [];
-  video.play();
-  recorder.start();
-  $('rec').textContent = '■ Stop';
+  await Promise.race([
+    new Promise(r => video.addEventListener('seeked', r, { once: true })),
+    new Promise(r => setTimeout(r, 1500))
+  ]);
+  prevGray = null; tracks = []; hitQueue = []; lastTime = -1; pulse = 0;
+}
+
+$('exportBtn').onclick = async () => {
+  if (exporting) { exporting.cancelled = true; video.pause(); exporting.finish(); return; }
+  if (!video.src) { setStatus('Load a video first.'); return; }
+
+  initAudio();
+  try { await actx.resume(); } catch (e) {}
+  const btn = $('exportBtn');
+  const job = { cancelled: false, finish: () => {} };
+  exporting = job;
+  btn.textContent = '■ Cancel export';
+  video.loop = false;
+
+  const ended = new Promise(r => { job.finish = r; video.addEventListener('ended', r, { once: true }); });
+  let timer = null;
+  const showProgress = () => {
+    timer = setInterval(() => {
+      const pct = video.duration ? Math.min(100, Math.round(video.currentTime / video.duration * 100)) : 0;
+      setStatus(`Exporting… ${pct}%. Keep this tab open and in front until it finishes.`);
+    }, 250);
+  };
+  const cleanUp = () => {
+    clearInterval(timer);
+    video.loop = true;
+    btn.textContent = '⇩ Export .mov';
+    exporting = null;
+  };
+  const baseName = loadedName.replace(/\.[^.]+$/, '') + '-blobs';
+
+  // ----- Preferred path: a real .mov file (H.264 video) using the Mediabunny library -----
+  setStatus('Loading the .mov exporter…');
+  let mb = null;
+  try { mb = await import('https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/+esm'); } catch (e) { console.warn('Mediabunny failed to load', e); }
+
+  if (mb && !job.cancelled) {
+    let output = null, vTrack = null, aTrack = null, started = false;
+    try {
+      await rewind();
+      vTrack = out.captureStream(30).getVideoTracks()[0];
+      const srcAudio = audioDest ? audioDest.stream.getAudioTracks()[0] : null;
+      aTrack = srcAudio ? srcAudio.clone() : null;
+
+      output = new mb.Output({ format: new mb.MovOutputFormat(), target: new mb.BufferTarget() });
+      const vSrc = new mb.MediaStreamVideoTrackSource(vTrack, { codec: 'avc', bitrate: mb.QUALITY_VERY_HIGH });
+      output.addVideoTrack(vSrc, { frameRate: 30 });
+      let aSrc = null;
+      if (aTrack) {
+        let codec = 'aac';
+        try { if (!(await mb.canEncodeAudio('aac'))) codec = 'opus'; } catch (e) {}
+        aSrc = new mb.MediaStreamAudioTrackSource(aTrack, { codec, bitrate: mb.QUALITY_HIGH });
+        output.addAudioTrack(aSrc);
+      }
+      await output.start();
+      started = true;
+      await video.play();
+      showProgress();
+      const failed = Promise.race([vSrc.errorPromise, aSrc ? aSrc.errorPromise : new Promise(() => {})]);
+      await Promise.race([ended, failed]);
+
+      if (job.cancelled) {
+        await output.cancel();
+        setStatus('Export cancelled.');
+      } else {
+        setStatus('Finishing the .mov file…');
+        await output.finalize();
+        download(new Blob([output.target.buffer], { type: 'video/quicktime' }), baseName + '.mov');
+        setStatus('Export done: ' + baseName + '.mov');
+      }
+      vTrack.stop(); if (aTrack) aTrack.stop();
+      cleanUp();
+      return;
+    } catch (e) {
+      console.warn('.mov export failed', e);
+      try { if (output) await output.cancel(); } catch (e2) {}
+      if (vTrack) vTrack.stop();
+      if (aTrack) aTrack.stop();
+      video.pause();
+      if (started) { setStatus('The .mov export hit an error partway: ' + (e && e.message ? e.message : e)); cleanUp(); return; }
+      // Otherwise fall through to the backup exporter below
+    }
+  }
+  if (job.cancelled) { setStatus('Export cancelled.'); cleanUp(); return; }
+
+  // ----- Backup path: the browser's built-in recorder (MP4 or WebM) -----
+  try {
+    await rewind();
+    const stream = out.captureStream(30);
+    if (audioDest) audioDest.stream.getAudioTracks().forEach(t => stream.addTrack(t.clone()));
+    const type = ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+      .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+    const rec = new MediaRecorder(stream, type ? { mimeType: type, videoBitsPerSecond: 12e6 } : {});
+    const chunks = [];
+    rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    const stopped = new Promise(r => { rec.onstop = r; });
+    rec.start(1000);
+    await video.play();
+    showProgress();
+    await ended;
+    rec.stop();
+    await stopped;
+    stream.getTracks().forEach(t => t.stop());
+    if (job.cancelled) { setStatus('Export cancelled.'); }
+    else {
+      const mime = rec.mimeType || 'video/webm';
+      const ext = mime.includes('mp4') ? 'mp4' : 'webm';
+      download(new Blob(chunks, { type: mime }), baseName + '.' + ext);
+      setStatus(`This browser couldn't make a .mov, so it was saved as .${ext} instead.`);
+    }
+  } catch (e) {
+    console.warn(e);
+    setStatus('Export failed: ' + (e && e.message ? e.message : e));
+  }
+  cleanUp();
 };
 
 // ---------- Start ----------
