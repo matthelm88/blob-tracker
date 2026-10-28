@@ -1,1 +1,286 @@
 <!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blob Tracker</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0b0b0b; color: #eee; font: 14px/1.4 system-ui, sans-serif; }
+  header { padding: 12px 16px; border-bottom: 1px solid #222; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .08em; }
+  main { display: grid; grid-template-columns: 1fr 280px; gap: 16px; padding: 16px; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  .stage { background: #000; display: flex; align-items: center; justify-content: center; min-height: 300px; border: 1px solid #222; }
+  canvas { max-width: 100%; height: auto; display: block; }
+  .panel { display: flex; flex-direction: column; gap: 14px; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #aaa; }
+  label.check { flex-direction: row; align-items: center; gap: 8px; }
+  .val { color: #fff; }
+  input[type=range] { width: 100%; }
+  button, select { background: #1c1c1c; color: #eee; border: 1px solid #333; padding: 8px 10px; border-radius: 6px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #666; }
+  button.rec { border-color: #a33; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .hint { color: #777; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>BLOB TRACKER</h1>
+  <input type="file" id="file" accept="video/*">
+  <span class="hint" id="status">Load a video to start.</span>
+</header>
+<main>
+  <div class="stage"><canvas id="out" width="960" height="540"></canvas></div>
+  <div class="panel">
+    <div class="row">
+      <button id="play">Play / Pause</button>
+      <button id="rec" class="rec">● Record</button>
+    </div>
+    <label>Detection mode
+      <select id="mode">
+        <option value="motion">Motion (things that move)</option>
+        <option value="bright">Brightness (bright things)</option>
+      </select>
+    </label>
+    <label>Threshold: <span class="val" id="thresholdV"></span>
+      <input type="range" id="threshold" min="5" max="250" value="30">
+    </label>
+    <label>Smallest blob size: <span class="val" id="minSizeV"></span>
+      <input type="range" id="minSize" min="1" max="300" value="20">
+    </label>
+    <label>Max blobs: <span class="val" id="maxBlobsV"></span>
+      <input type="range" id="maxBlobs" min="1" max="60" value="16">
+    </label>
+    <label>Link distance (% of width): <span class="val" id="linkDistV"></span>
+      <input type="range" id="linkDist" min="0" max="60" value="20">
+    </label>
+    <label>Detection detail: <span class="val" id="detailV"></span>
+      <input type="range" id="detail" min="60" max="320" value="160">
+    </label>
+    <label>Darken video (%): <span class="val" id="dimV"></span>
+      <input type="range" id="dim" min="0" max="100" value="20">
+    </label>
+    <label class="check"><input type="checkbox" id="labels" checked> Show labels</label>
+    <p class="hint">Motion mode finds moving people and hands. Brightness mode finds lights and bright areas. Raise the threshold or the smallest blob size if you get too many blobs.</p>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const out = $('out');
+const ctx = out.getContext('2d');
+const video = document.createElement('video');
+video.muted = true;
+video.playsInline = true;
+video.loop = true;
+
+const small = document.createElement('canvas');
+const sctx = small.getContext('2d', { willReadFrequently: true });
+
+let prevGray = null;
+let blobs = [];
+let nextId = 1;
+let lastTime = -1;
+let recorder = null;
+let chunks = [];
+
+// Show slider values next to their labels
+['threshold', 'minSize', 'maxBlobs', 'linkDist', 'detail', 'dim'].forEach(id => {
+  const el = $(id), v = $(id + 'V');
+  const upd = () => { v.textContent = el.value; };
+  el.addEventListener('input', upd);
+  upd();
+});
+$('detail').addEventListener('input', () => { prevGray = null; });
+$('mode').addEventListener('change', () => { prevGray = null; blobs = []; });
+
+$('file').addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  video.src = URL.createObjectURL(f);
+  video.onloadedmetadata = () => {
+    out.width = video.videoWidth;
+    out.height = video.videoHeight;
+    prevGray = null;
+    blobs = [];
+    lastTime = -1;
+    video.play();
+    $('status').textContent = `${f.name}: ${video.videoWidth}×${video.videoHeight}`;
+  };
+});
+
+$('play').onclick = () => { if (!video.src) return; video.paused ? video.play() : video.pause(); };
+
+// Find blobs in the current frame
+function detect() {
+  const w = +$('detail').value;
+  const h = Math.max(1, Math.round(w * video.videoHeight / video.videoWidth));
+  if (small.width !== w || small.height !== h) { small.width = w; small.height = h; prevGray = null; }
+  sctx.drawImage(video, 0, 0, w, h);
+  const px = sctx.getImageData(0, 0, w, h).data;
+  const n = w * h;
+  const gray = new Uint8Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4) gray[i] = (px[j] * 77 + px[j + 1] * 150 + px[j + 2] * 29) >> 8;
+
+  const th = +$('threshold').value;
+  const mode = $('mode').value;
+  const mask = new Uint8Array(n);
+  if (mode === 'motion') {
+    if (!prevGray) { prevGray = gray; return []; }
+    for (let i = 0; i < n; i++) mask[i] = Math.abs(gray[i] - prevGray[i]) > th ? 1 : 0;
+  } else {
+    for (let i = 0; i < n; i++) mask[i] = gray[i] > th ? 1 : 0;
+  }
+  prevGray = gray;
+
+  // Grow each pixel by one so nearby specks join into one blob
+  const m = new Uint8Array(n);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if (!mask[i]) continue;
+    m[i] = 1;
+    if (x > 0) m[i - 1] = 1;
+    if (x < w - 1) m[i + 1] = 1;
+    if (y > 0) m[i - w] = 1;
+    if (y < h - 1) m[i + w] = 1;
+  }
+
+  // Group touching pixels into blobs
+  const seen = new Uint8Array(n);
+  const stack = new Int32Array(n);
+  const found = [];
+  for (let s = 0; s < n; s++) {
+    if (!m[s] || seen[s]) continue;
+    let top = 0;
+    stack[top++] = s;
+    seen[s] = 1;
+    let minX = w, minY = h, maxX = 0, maxY = 0, sx = 0, sy = 0, area = 0;
+    while (top) {
+      const i = stack[--top];
+      const x = i % w, y = (i / w) | 0;
+      area++; sx += x; sy += y;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      if (x > 0 && m[i - 1] && !seen[i - 1]) { seen[i - 1] = 1; stack[top++] = i - 1; }
+      if (x < w - 1 && m[i + 1] && !seen[i + 1]) { seen[i + 1] = 1; stack[top++] = i + 1; }
+      if (y > 0 && m[i - w] && !seen[i - w]) { seen[i - w] = 1; stack[top++] = i - w; }
+      if (y < h - 1 && m[i + w] && !seen[i + w]) { seen[i + w] = 1; stack[top++] = i + w; }
+    }
+    found.push({ minX, minY, maxX, maxY, cx: sx / area, cy: sy / area, area });
+  }
+
+  const minSize = +$('minSize').value;
+  const maxB = +$('maxBlobs').value;
+  const kx = out.width / w, ky = out.height / h;
+  return found
+    .filter(b => b.area >= minSize)
+    .sort((a, b) => b.area - a.area)
+    .slice(0, maxB)
+    .map(b => ({
+      x: b.minX * kx, y: b.minY * ky,
+      w: (b.maxX - b.minX + 1) * kx, h: (b.maxY - b.minY + 1) * ky,
+      cx: (b.cx + 0.5) * kx, cy: (b.cy + 0.5) * ky
+    }));
+}
+
+// Keep blob numbers steady by matching each blob to the nearest one from the last frame
+function assignIds(cur, prev) {
+  const used = new Set();
+  const maxD = out.width * 0.08;
+  for (const b of cur) {
+    let best = null, bd = maxD;
+    for (const p of prev) {
+      if (used.has(p.id)) continue;
+      const d = Math.hypot(p.cx - b.cx, p.cy - b.cy);
+      if (d < bd) { bd = d; best = p; }
+    }
+    if (best) { b.id = best.id; used.add(best.id); } else { b.id = nextId++; }
+  }
+}
+
+function draw() {
+  ctx.drawImage(video, 0, 0, out.width, out.height);
+  const dim = +$('dim').value / 100;
+  if (dim > 0) { ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, out.width, out.height); }
+
+  const lw = Math.max(1, out.width / 960);
+  ctx.strokeStyle = '#fff';
+  ctx.fillStyle = '#fff';
+  ctx.lineWidth = lw;
+
+  // Lines between nearby blobs
+  const link = +$('linkDist').value / 100 * out.width;
+  ctx.globalAlpha = 0.6;
+  ctx.beginPath();
+  for (let i = 0; i < blobs.length; i++) for (let j = i + 1; j < blobs.length; j++) {
+    const a = blobs[i], b = blobs[j];
+    if (Math.hypot(a.cx - b.cx, a.cy - b.cy) < link) { ctx.moveTo(a.cx, a.cy); ctx.lineTo(b.cx, b.cy); }
+  }
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Boxes
+  for (const b of blobs) ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w, b.h);
+
+  // Centre dots
+  const r = 2.5 * lw;
+  for (const b of blobs) { ctx.beginPath(); ctx.arc(b.cx, b.cy, r, 0, Math.PI * 2); ctx.fill(); }
+
+  // Labels
+  if ($('labels').checked) {
+    ctx.font = `${Math.round(11 * lw)}px monospace`;
+    ctx.textBaseline = 'bottom';
+    for (const b of blobs) ctx.fillText(`#${b.id}  ${Math.round(b.cx)},${Math.round(b.cy)}`, b.x, b.y - 2 * lw);
+  }
+}
+
+function loop() {
+  if (video.readyState >= 2) {
+    const newFrame = video.currentTime !== lastTime;
+    // Only detect on a new video frame (motion), or anytime in brightness mode so sliders update while paused
+    if (newFrame || $('mode').value === 'bright') {
+      lastTime = video.currentTime;
+      const nb = detect();
+      assignIds(nb, blobs);
+      blobs = nb;
+    }
+    draw();
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// Record the canvas and download it
+$('rec').onclick = () => {
+  if (recorder) { recorder.stop(); return; }
+  if (!video.src) return;
+  const stream = out.captureStream(30);
+  const type = ['video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+  recorder = new MediaRecorder(stream, type ? { mimeType: type, videoBitsPerSecond: 12e6 } : {});
+  chunks = [];
+  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => {
+    const mime = recorder.mimeType || 'video/webm';
+    const file = new Blob(chunks, { type: mime });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file);
+    a.download = 'blob-tracked.' + (mime.includes('mp4') ? 'mp4' : 'webm');
+    a.click();
+    recorder = null;
+    $('rec').textContent = '● Record';
+  };
+  video.currentTime = 0;
+  prevGray = null;
+  video.play();
+  recorder.start();
+  $('rec').textContent = '■ Stop';
+};
+</script>
+</body>
+</html>
